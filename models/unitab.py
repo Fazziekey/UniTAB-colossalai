@@ -230,12 +230,12 @@ class SetCaptionCriterion(nn.Module):
     def forward(self, outputs, targets, positive_map):
         target_indx = outputs["caption_gt"]
         logits = outputs["pred_logits"].permute(0,2,1)#.log_softmax(-1)  # BS x (num_queries) x (num_tokens)
-        torch.set_deterministic(False)
+        #torch.set_deterministic(False)
         loss_ce = F.cross_entropy(
             logits, target_indx
             , ignore_index=1
         )
-        torch.set_deterministic(True)
+        #torch.set_deterministic(True)
         losses = {"loss_ce": loss_ce}
         return losses
 

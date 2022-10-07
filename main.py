@@ -212,7 +212,7 @@ def main(args):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.set_deterministic(True)
+    #torch.set_deterministic(True)
 
     # Build the model
     model, criterion, weight_dict = build_model(args)
@@ -279,7 +279,8 @@ def main(args):
                 [build_dataset(name, image_set="train", args=args) for name in args.combine_datasets]
             )
 
-        if args.distributed:
+        #if args.distributed:
+        if 1:
             sampler_train = DistributedSampler(dataset_train)
         else:
             sampler_train = torch.utils.data.RandomSampler(dataset_train)
@@ -309,7 +310,8 @@ def main(args):
     for dset_name in args.combine_datasets_val:
         dset = build_dataset(dset_name, image_set="val", args=args)
         sampler = (
-            DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
+            DistributedSampler(dset, shuffle=False) if 1 else torch.utils.data.SequentialSampler(dset)
+            #DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
         )
         dataloader = DataLoader(
             dset,
@@ -442,7 +444,8 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         print(f"Starting epoch {epoch}")
         engine.train()
-        if args.distributed:
+        #if args.distributed:
+        if 1:
         #     sampler_train.set_epoch(epoch)
         # train_stats = train_one_epoch(
         #     model=model,
