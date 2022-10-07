@@ -1,5 +1,5 @@
 CUBLAS_WORKSPACE_CONFIG=:4096:8  
-colossalai run --nproc_per_node 4 --master_port 29505  main.py \
+torchrun --nproc_per_node=2 --master_port 29505  main.py \
     --dataset_config configs/pretrain.json \
     --batch_size 2 \
     --lr_backbone 2e-5 \
