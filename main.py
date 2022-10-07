@@ -10,6 +10,7 @@ from collections import namedtuple
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
+from xml.sax.handler import feature_string_interning
 
 import numpy as np
 import torch
@@ -22,9 +23,22 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from datasets.coco_eval import CocoEvaluator
 from datasets.flickr_eval import FlickrEvaluator, FlickrCaptionEvaluator
 from datasets.refexp import RefExpEvaluator
-from engine import evaluate, train_one_epoch
+# from engine import evaluate, train_one_epoch
 from models import build_model
 from models.postprocessors import build_postprocessors
+
+import colossalai
+from colossalai.core import global_context as gpc
+# from colossalai.context.parallel_mode import ParallelMode
+from colossalai.logging import disable_existing_loggers, get_dist_logger
+from colossalai.utils import save_checkpoint
+# from colossalai.nn import LinearWarmupLR
+# from colossalai.trainer import Trainer, hooks
+# from colossalai.utils import colo_set_process_memory_fraction, get_current_device, MultiTimer
+# from colossalai.utils.model.colo_init_context import ColoInitContext
+# from colossalai.nn._ops import *
+# from colossalai.nn.parallel.layers import init_colo_module
+# from colossalai.tensor import TensorSpec, ComputePattern, ParallelAction
 
 
 def get_args_parser():
@@ -159,14 +173,24 @@ def get_args_parser():
     parser.add_argument("--num_workers", default=5, type=int)
 
     # Distributed training parameters
-    parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
+    
+    # Distributed training parameters for colossalai
+    # parser.add_argument('--config', type=str, help='path to the config file')
+    # parser.add_argument('--host', type=str, help='the master address for distributed training')
+    # parser.add_argument('--port', type=int, help='the master port for distributed training')
+    # parser.add_argument('--world_size', type=int, help='world size for distributed training')
+    # parser.add_argument('--rank', type=int, help='rank for the default process group')
+    # parser.add_argument('--local_rank', type=int, help='local rank on the node')
+    # parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
+
     return parser
 
 
 def main(args):
     # Init distributed mode
-    dist.init_distributed_mode(args)
+    # dist.init_distributed_mode(args)
+    colossalai.launch_from_torch(config='./config.py')
 
     # Update dataset specific configs
     if args.dataset_config is not None:
@@ -197,9 +221,9 @@ def main(args):
     # Get a copy of the model for exponential moving averaged version of the model
     model_ema = deepcopy(model) if args.ema else None
     model_without_ddp = model
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-        model_without_ddp = model.module
+    # if args.distributed:
+    #     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+    #     model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of params:", n_parameters)
 
@@ -372,6 +396,7 @@ def main(args):
             )
         return evaluator_list
 
+
     # Runs only evaluation, by default on the validation set unless --test is passed.
     if args.eval:
         test_stats = {}
@@ -400,26 +425,49 @@ def main(args):
         print(log_stats)
         return
 
+    # init colossalai features
+    engine, train_dataloader, test_dataloader, _ = colossalai.initialize(model,
+                                                                     optimizer = optimizer,
+                                                                     criterion = criterion,
+                                                                     train_dataloader = data_loader_train,
+                                                                     test_dataloader = val_tuples[0])
+                                                                     
+    # init colossal logger
+    logger = get_dist_logger()
+
     # Runs training and evaluates after every --eval_skip epochs
     print("Start training")
     start_time = time.time()
     best_metric = 0.0
     for epoch in range(args.start_epoch, args.epochs):
         print(f"Starting epoch {epoch}")
+        engine.train()
         if args.distributed:
-            sampler_train.set_epoch(epoch)
-        train_stats = train_one_epoch(
-            model=model,
-            criterion=criterion,
-            data_loader=data_loader_train,
-            weight_dict=weight_dict,
-            optimizer=optimizer,
-            device=device,
-            epoch=epoch,
-            args=args,
-            max_norm=args.clip_max_norm,
-            model_ema=model_ema,
-        )
+        #     sampler_train.set_epoch(epoch)
+        # train_stats = train_one_epoch(
+        #     model=model,
+        #     criterion=criterion,
+        #     data_loader=data_loader_train,
+        #     weight_dict=weight_dict,
+        #     optimizer=optimizer,
+        #     device=device,
+        #     epoch=epoch,
+        #     args=args,
+        #     max_norm=args.clip_max_norm,
+        #     model_ema=model_ema,
+        # )
+            for img, label in train_dataloader:
+                img = img.cuda()
+                label = label.cuda()
+
+                engine.zero_grad()
+                output = engine(img)
+                loss = engine.criterion(output, label)
+                engine.backward(loss)
+                engine.step()
+
+        logger.info(f"Epoch {epoch} - train loss: {loss:.5}")
+
         if args.output_dir:
             checkpoint_paths = [output_dir / "checkpoint.pth"]
             # extra checkpoint before LR drop and every 2 epochs
@@ -466,9 +514,9 @@ def main(args):
             "n_parameters": n_parameters,
         }
 
-        if args.output_dir and dist.is_main_process():
-            with (output_dir / "log.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
+        # if args.output_dir and dist.is_main_process():
+        with (output_dir / "log.txt").open("a") as f:
+            f.write(json.dumps(log_stats) + "\n")
 
         if epoch % args.eval_skip == 0:
             if args.do_caption:
@@ -481,16 +529,17 @@ def main(args):
                 checkpoint_paths = [output_dir / "BEST_checkpoint.pth"]
                 # extra checkpoint before LR drop and every 100 epochs
                 for checkpoint_path in checkpoint_paths:
-                    dist.save_on_master(
-                        {
-                            "model": model_without_ddp.state_dict(),
-                            "model_ema": model_ema.state_dict() if args.ema else None,
-                            "optimizer": optimizer.state_dict(),
-                            "epoch": epoch,
-                            "args": args,
-                        },
-                        checkpoint_path,
-                    )
+                    # dist.save_on_master(
+                    #     {
+                    #         "model": model_without_ddp.state_dict(),
+                    #         "model_ema": model_ema.state_dict() if args.ema else None,
+                    #         "optimizer": optimizer.state_dict(),
+                    #         "epoch": epoch,
+                    #         "args": args,
+                    #     },
+                    #     checkpoint_path,
+                    # )
+                    save_checkpoint(checkpoint_paths, epoch, model)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
