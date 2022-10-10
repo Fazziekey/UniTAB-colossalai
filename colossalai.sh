@@ -14,6 +14,7 @@ python main.py \
     --pretrain_seqcrop mixed \
     --ema \
     --output-dir weights/$exp_id \
+    --distributed \
     --load https://zenodo.org/record/4721981/files/pretrained_resnet101_checkpoint.pth \
     --host 127.0.0.1 \
     --port 29500 \

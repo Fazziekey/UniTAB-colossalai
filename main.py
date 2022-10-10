@@ -23,7 +23,7 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from datasets.coco_eval import CocoEvaluator
 from datasets.flickr_eval import FlickrEvaluator, FlickrCaptionEvaluator
 from datasets.refexp import RefExpEvaluator
-# from engine import evaluate, train_one_epoch
+from engine import evaluate, train_one_epoch
 from models import build_model
 from models.postprocessors import build_postprocessors
 
@@ -177,6 +177,7 @@ def get_args_parser():
     
     # Distributed training parameters for colossalai
     # parser.add_argument('--config', type=str, help='path to the config file')
+    parser.add_argument("--distributed", action="store_true", help="set up distributed training mode or not")
     parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
     parser.add_argument('--port', type=int, default=29500, help='the master port for distributed training')
     parser.add_argument('--world_size', type=int, default=2, help='world size for distributed training')
@@ -190,12 +191,13 @@ def get_args_parser():
 def main(args):
     # Init distributed mode
     # dist.init_distributed_mode(args)
-    colossalai.launch(config='./config.py',
-                  rank=args.rank,
-                  world_size=args.world_size,
-                  host=args.host,
-                  port=args.port,
-                  backend=args.backend)
+    if args.distributed:
+        colossalai.launch(config='./config.py',
+                    rank=args.rank,
+                    world_size=args.world_size,
+                    host=args.host,
+                    port=args.port,
+                    backend=args.backend)
 
     # Update dataset specific configs
     if args.dataset_config is not None:
@@ -284,8 +286,7 @@ def main(args):
                 [build_dataset(name, image_set="train", args=args) for name in args.combine_datasets]
             )
 
-        #if args.distributed:
-        if 1:
+        if args.distributed:
             sampler_train = DistributedSampler(dataset_train)
         else:
             sampler_train = torch.utils.data.RandomSampler(dataset_train)
@@ -315,8 +316,7 @@ def main(args):
     for dset_name in args.combine_datasets_val:
         dset = build_dataset(dset_name, image_set="val", args=args)
         sampler = (
-            DistributedSampler(dset, shuffle=False) if 1 else torch.utils.data.SequentialSampler(dset)
-            #DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
+            DistributedSampler(dset, shuffle=False) if args.distributed else torch.utils.data.SequentialSampler(dset)
         )
         dataloader = DataLoader(
             dset,
@@ -433,7 +433,9 @@ def main(args):
         return
 
     # init colossalai features
-    engine, train_dataloader, test_dataloader, _ = colossalai.initialize(model,
+    colossalai_engine = None
+    if args.distributed:
+        colossalai_engine, train_dataloader, test_dataloader, _ = colossalai.initialize(model,
                                                                      optimizer = optimizer,
                                                                      criterion = criterion,
                                                                      train_dataloader = data_loader_train,
@@ -448,31 +450,21 @@ def main(args):
     best_metric = 0.0
     for epoch in range(args.start_epoch, args.epochs):
         print(f"Starting epoch {epoch}")
-        engine.train()
-        #if args.distributed:
-        if 1:
-        #     sampler_train.set_epoch(epoch)
-        # train_stats = train_one_epoch(
-        #     model=model,
-        #     criterion=criterion,
-        #     data_loader=data_loader_train,
-        #     weight_dict=weight_dict,
-        #     optimizer=optimizer,
-        #     device=device,
-        #     epoch=epoch,
-        #     args=args,
-        #     max_norm=args.clip_max_norm,
-        #     model_ema=model_ema,
-        # )
-            for img, label in train_dataloader:
-                img = img.cuda()
-                label = label.cuda()
-
-                engine.zero_grad()
-                output = engine(img)
-                loss = engine.criterion(output, label)
-                engine.backward(loss)
-                engine.step()
+        if args.distributed:
+            sampler_train.set_epoch(epoch)
+            train_stats = train_one_epoch(
+                model=model,
+                criterion=criterion,
+                data_loader=data_loader_train,
+                weight_dict=weight_dict,
+                optimizer=optimizer,
+                device=device,
+                epoch=epoch,
+                args=args,
+                max_norm=args.clip_max_norm,
+                model_ema=model_ema,
+                colossalai_engine = colossalai_engine,
+            )
 
         logger.info(f"Epoch {epoch} - train loss: {loss:.5}")
 

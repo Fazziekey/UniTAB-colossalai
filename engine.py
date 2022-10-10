@@ -19,6 +19,8 @@ from util.metrics import MetricLogger, SmoothedValue
 from util.misc import targets_to
 from util.optim import adjust_learning_rate, update_ema
 
+import colossalai.engine as Engine
+
 def train_one_epoch(
     model: torch.nn.Module,
     criterion: Optional[torch.nn.Module],
@@ -30,6 +32,7 @@ def train_one_epoch(
     args,
     max_norm: float = 0,
     model_ema: Optional[torch.nn.Module] = None,
+    colossalai_engine: Engine = None,
 ):
     model.train()
     if criterion is not None:
@@ -53,11 +56,17 @@ def train_one_epoch(
         targets = targets_to(targets, device)
 
         memory_cache = model(samples, captions, targets, encode_and_save=True)
-        outputs = model(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
+        if colossalai_engine is not None:
+            outputs = colossalai_engine(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
+        else:
+            outputs = model(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
 
         loss_dict = {}
         if criterion is not None:
-            loss_dict.update(criterion(outputs, targets, positive_map))
+            if colossalai_engine is not None:
+                loss_dict.update(colossalai_engine.criterion(outputs, targets, positive_map))
+            else:
+                loss_dict.update(criterion(outputs, targets, positive_map))
 
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
@@ -74,11 +83,20 @@ def train_one_epoch(
             print(loss_dict_reduced)
             sys.exit(1)
 
-        optimizer.zero_grad()
-        losses.backward()
+        if colossalai_engine is not None:
+            colossalai_engine.zero_grad()
+            colossalai_engine.backward(losses)
+        else:
+            optimizer.zero_grad()
+            losses.backward()
+
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
+
+        if colossalai_engine is not None:
+            colossalai_engine.step()
+        else:
+            optimizer.step()
 
         adjust_learning_rate(
             optimizer,
