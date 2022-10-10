@@ -177,12 +177,12 @@ def get_args_parser():
     
     # Distributed training parameters for colossalai
     # parser.add_argument('--config', type=str, help='path to the config file')
-    # parser.add_argument('--host', type=str, help='the master address for distributed training')
-    # parser.add_argument('--port', type=int, help='the master port for distributed training')
-    # parser.add_argument('--world_size', type=int, help='world size for distributed training')
-    # parser.add_argument('--rank', type=int, help='rank for the default process group')
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
+    parser.add_argument('--port', type=int, default=29500, help='the master port for distributed training')
+    parser.add_argument('--world_size', type=int, default=2, help='world size for distributed training')
+    parser.add_argument('--rank', type=int, default=0, help='rank for the default process group')
     # parser.add_argument('--local_rank', type=int, help='local rank on the node')
-    # parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
+    parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
 
     return parser
 
@@ -190,7 +190,12 @@ def get_args_parser():
 def main(args):
     # Init distributed mode
     # dist.init_distributed_mode(args)
-    colossalai.launch_from_torch(config='./config.py')
+    colossalai.launch(config='./config.py',
+                  rank=args.rank,
+                  world_size=args.world_size,
+                  host=args.host,
+                  port=args.port,
+                  backend=args.backend)
 
     # Update dataset specific configs
     if args.dataset_config is not None:
