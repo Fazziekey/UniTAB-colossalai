@@ -35,6 +35,8 @@ def train_one_epoch(
     colossalai_engine: Engine = None,
 ):
     model.train()
+    if colossalai_engine is not None:
+        colossalai_engine.train()
     if criterion is not None:
         criterion.train()
     metric_logger = MetricLogger(delimiter="  ")
@@ -57,6 +59,7 @@ def train_one_epoch(
 
         memory_cache = model(samples, captions, targets, encode_and_save=True)
         if colossalai_engine is not None:
+            colossalai_engine.zero_grad()
             outputs = colossalai_engine(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
         else:
             outputs = model(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
@@ -84,7 +87,6 @@ def train_one_epoch(
             sys.exit(1)
 
         if colossalai_engine is not None:
-            colossalai_engine.zero_grad()
             colossalai_engine.backward(losses)
         else:
             optimizer.zero_grad()

@@ -1,7 +1,7 @@
 CUBLAS_WORKSPACE_CONFIG=:4096:8  
-
-python main.py \
-    --dataset_config configs/pretrain.json \
+# export LOCAL_RANK = 0
+torchrun --nproc_per_node=4 --master_port 29505  main.py \
+    --dataset_config configs/pretrain_test_flickr_only.json \
     --batch_size 2 \
     --lr_backbone 2e-5 \
     --text_encoder_lr 2e-5 \
@@ -14,12 +14,6 @@ python main.py \
     --pretrain_seqcrop mixed \
     --ema \
     --output-dir weights/$exp_id \
+    --distributed \
+    --load ./weights/pretrained_checkpoint.pth \
     --from_colossalai \
-    --load https://zenodo.org/record/4721981/files/pretrained_resnet101_checkpoint.pth \
-    --host 127.0.0.1 \
-    --port 29500 \
-    --world_size 2 \
-    --rank 0 \
-    --backend nccl \
-    --local_rank 0
-

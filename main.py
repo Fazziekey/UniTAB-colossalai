@@ -178,11 +178,12 @@ def get_args_parser():
     # Distributed training parameters for colossalai
     # parser.add_argument('--config', type=str, help='path to the config file')
     parser.add_argument("--distributed", action="store_true", help="set up distributed training mode or not")
+    parser.add_argument("--from_colossalai", action="store_true", help="luanch from colossalai or not")
     parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
     parser.add_argument('--port', type=int, default=29500, help='the master port for distributed training')
     parser.add_argument('--world_size', type=int, default=2, help='world size for distributed training')
     parser.add_argument('--rank', type=int, default=0, help='rank for the default process group')
-    # parser.add_argument('--local_rank', type=int, help='local rank on the node')
+    parser.add_argument('--local_rank', type=int, default=0, help='local rank on the node')
     parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
 
     return parser
@@ -190,14 +191,22 @@ def get_args_parser():
 
 def main(args):
     # Init distributed mode
-    # dist.init_distributed_mode(args)
-    if args.distributed:
-        colossalai.launch(config='./config.py',
-                    rank=args.rank,
-                    world_size=args.world_size,
-                    host=args.host,
-                    port=args.port,
-                    backend=args.backend)
+
+    if args.from_colossalai:
+        print("init distributed mode from colossalai")
+        if args.distributed:
+            colossalai.launch_from_torch(config='./config.py')
+        else:
+            colossalai.launch(config='./config.py',
+                        rank=args.rank,
+                        world_size=args.world_size,
+                        host=args.host,
+                        port=args.port,
+                        backend=args.backend)
+    elif args.distributed:
+        print("init distributed mode from torch")
+        dist.init_distributed_mode(args)
+
 
     # Update dataset specific configs
     if args.dataset_config is not None:
@@ -228,9 +237,9 @@ def main(args):
     # Get a copy of the model for exponential moving averaged version of the model
     model_ema = deepcopy(model) if args.ema else None
     model_without_ddp = model
-    # if args.distributed:
-    #     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-    #     model_without_ddp = model.module
+    if args.distributed and not args.from_colossalai:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+        model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of params:", n_parameters)
 
@@ -434,7 +443,7 @@ def main(args):
 
     # init colossalai features
     colossalai_engine = None
-    if args.distributed:
+    if args.from_colossalai:
         colossalai_engine, train_dataloader, test_dataloader, _ = colossalai.initialize(model,
                                                                      optimizer = optimizer,
                                                                      criterion = criterion,

@@ -84,6 +84,6 @@ def adjust_learning_rate(
 
     base_lrs = [args.lr, args.lr_backbone, args.text_encoder_lr]
     gammas = [gamma, gamma, text_encoder_gamma]
-    assert len(optimizer.param_groups) == len(base_lrs)
+    # assert len(optimizer.param_groups) == len(base_lrs)
     for param_group, lr, gamma_group in zip(optimizer.param_groups, base_lrs, gammas):
         param_group["lr"] = lr * gamma_group
