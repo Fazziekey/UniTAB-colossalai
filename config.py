@@ -5,4 +5,4 @@ NUM_EPOCHS = 1
 
 fp16=dict(mode=AMP_TYPE.TORCH)
 
-torch_ddp=dict(find_unused_parameters=True)
+torch_ddp=dict(find_unused_parameters=True,broadcast_buffers=False)

@@ -1,5 +1,5 @@
 CUBLAS_WORKSPACE_CONFIG=:4096:8  
-# export LOCAL_RANK = 0
+
 torchrun --nproc_per_node=4 --master_port 29505  main.py \
     --dataset_config configs/pretrain_test_flickr_only.json \
     --batch_size 2 \
