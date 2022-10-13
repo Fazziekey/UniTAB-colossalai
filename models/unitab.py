@@ -15,6 +15,9 @@ from .backbone import build_backbone
 from .postprocessors import build_postprocessors
 from .transformer_unitab import build_transformer
 
+from colossalai.zero.init_ctx import ZeroInitContext
+from colossalai.core import global_context as gpc
+
 
 def withbbox_subseq(textonly_subseq, bbox, start_token, end_token):
     withbbox_subseq = torch.zeros(textonly_subseq.shape[0]+4+2).long().to(textonly_subseq.device)
@@ -245,6 +248,7 @@ def build(args):
     backbone = build_backbone(args)
 
     transformer = build_transformer(args)
+
 
     model = UniTAB(
         backbone,

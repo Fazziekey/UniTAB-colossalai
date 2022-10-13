@@ -29,16 +29,10 @@ from models.postprocessors import build_postprocessors
 
 import colossalai
 from colossalai.core import global_context as gpc
-# from colossalai.context.parallel_mode import ParallelMode
 from colossalai.logging import disable_existing_loggers, get_dist_logger
 from colossalai.utils import save_checkpoint
-# from colossalai.nn import LinearWarmupLR
-# from colossalai.trainer import Trainer, hooks
-# from colossalai.utils import colo_set_process_memory_fraction, get_current_device, MultiTimer
-# from colossalai.utils.model.colo_init_context import ColoInitContext
-# from colossalai.nn._ops import *
-# from colossalai.nn.parallel.layers import init_colo_module
-# from colossalai.tensor import TensorSpec, ComputePattern, ParallelAction
+from colossalai.zero.init_ctx import ZeroInitContext
+from colossalai.zero.shard_utils import BucketTensorShardStrategy, TensorShardStrategy
 
 
 def get_args_parser():
@@ -234,14 +228,21 @@ def main(args):
     model, criterion, weight_dict = build_model(args)
     model.to(device)
 
+
+
     # Get a copy of the model for exponential moving averaged version of the model
     model_ema = deepcopy(model) if args.ema else None
+    # ctx = ZeroInitContext(target_device=torch.cuda.current_device(),
+    #                     shard_strategy=gpc.config.zero.model_config.shard_strategy,
+    #                     shard_param=True)
+    # with ctx:
     model_without_ddp = model
     if args.distributed and not args.from_colossalai:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True, broadcast_buffers=False)
         model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of params:", n_parameters)
+
 
     # Set up optimizers
     param_dicts = [
