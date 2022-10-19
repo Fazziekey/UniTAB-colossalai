@@ -1,15 +1,15 @@
 {
     "combine_datasets": ["flickr"],
     "combine_datasets_val": ["flickr"],
-    "coco_path": ["/data2/users/lcmql/unitab/data/coco","/data2/users/lcmql/unitab/data/coco"],
-    "vg_img_path": "/data2/users/lcmql/unitab/data/gqa/images",
-    "flickr_img_path": ["/data2/users/lcmql/unitab/data/Flickr30k/flickr30k_images_split/","none"],
-    "refexp_ann_path": "/data2/users/lcmql/unitab/annotations",
-    "flickr_ann_path": "/data2/users/lcmql/unitab/annotations",
-    "gqa_ann_path": "/data2/users/lcmql/unitab/annotations",
+    "coco_path": ["data/coco","data/coco"],
+    "vg_img_path": "data/gqa/images",
+    "flickr_img_path": ["data/Flickr30k/flickr30k_images_split/","none"],
+    "refexp_ann_path": "annotations",
+    "flickr_ann_path": "annotations",
+    "gqa_ann_path": "annotations",
     "refexp_dataset_name": ["none","all"],
     "GT_type": ["mergedGT_pretrain","none"],
-    "flickr_dataset_path": "/data2/users/lcmql/unitab/data/Flickr30k/",
+    "flickr_dataset_path": "data/Flickr30k/",
     "epochs": 1,
     "lr_drop": 15
 }

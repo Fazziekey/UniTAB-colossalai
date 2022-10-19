@@ -170,7 +170,7 @@ def get_args_parser():
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
     
     # Distributed training parameters for colossalai
-    # parser.add_argument('--config', type=str, help='path to the config file')
+    parser.add_argument('--colossalai_config', type=str, help='path to the config file')
     parser.add_argument("--distributed", action="store_true", help="set up distributed training mode or not")
     parser.add_argument("--from_colossalai", action="store_true", help="luanch from colossalai or not")
     parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
@@ -189,9 +189,9 @@ def main(args):
     if args.from_colossalai:
         print("init distributed mode from colossalai")
         if args.distributed:
-            colossalai.launch_from_torch(config='./config.py')
+            colossalai.launch_from_torch(config=args.colossalai_config)
         else:
-            colossalai.launch(config='./config.py',
+            colossalai.launch(config=args.colossalai_config,
                         rank=args.rank,
                         world_size=args.world_size,
                         host=args.host,
