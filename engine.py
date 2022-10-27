@@ -57,6 +57,10 @@ def train_one_epoch(
 
         targets = targets_to(targets, device)
 
+        if args.use_colo_zero:
+            samples = samples.to(torch.half)
+            print(samples)
+            print(captions)
         memory_cache = model(samples, captions, targets, encode_and_save=True)
         if colossalai_engine is not None:
             colossalai_engine.zero_grad()
