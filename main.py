@@ -34,6 +34,7 @@ from colossalai.utils import save_checkpoint
 from colossalai.zero.init_ctx import ZeroInitContext
 from colossalai.zero.shard_utils import BucketTensorShardStrategy, TensorShardStrategy
 
+import deepspeed
 
 def get_args_parser():
     parser = argparse.ArgumentParser("Set transformer detector", add_help=False)
@@ -170,7 +171,7 @@ def get_args_parser():
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
     
     # Distributed training parameters for colossalai
-    parser.add_argument('--colossalai_config', type=str, help='path to the config file')
+    parser.add_argument('--colossalai_config', default=None, type=str, help='path to the config file')
     parser.add_argument("--distributed", action="store_true", help="set up distributed training mode or not")
     parser.add_argument("--from_colossalai", action="store_true", help="luanch from colossalai or not")
     parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
@@ -180,6 +181,8 @@ def get_args_parser():
     parser.add_argument('--local_rank', type=int, default=0, help='local rank on the node')
     parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
 
+    parser.add_argument('--from_deepspeed', action='store_true', default=None, help='whether use deepspeed or not')
+    parser.add_argument("--deepspeed_config", type=str, default=None, help='path to deepspeed config file')
     return parser
 
 
@@ -197,6 +200,11 @@ def main(args):
                         host=args.host,
                         port=args.port,
                         backend=args.backend)
+    #elif args.from_deepspeed:
+    #    print("init distributed mode from deepspeed")
+    #    import deepspeed
+    #    deepspeed.init_distributed()
+
     elif args.distributed:
         print("init distributed mode from torch")
         dist.init_distributed_mode(args)
@@ -451,8 +459,16 @@ def main(args):
                                                                      train_dataloader = data_loader_train,
                                                                      test_dataloader = val_tuples[0])
                                                                      
-    # init colossal logger
-    logger = get_dist_logger()
+        # init colossal logger
+        logger = get_dist_logger()
+
+    if args.from_deepspeed:
+        deepspeed_engine, optimizer, _, _ = deepspeed.initialize(
+                                                         model=model,
+                                                         optimizer=optimizer,
+                                                         config=args.deepspeed_config,
+                                                         )
+    
 
     # Runs training and evaluates after every --eval_skip epochs
     print("Start training")
@@ -474,6 +490,7 @@ def main(args):
                 max_norm=args.clip_max_norm,
                 model_ema=model_ema,
                 colossalai_engine = colossalai_engine,
+                deepspeed_engine = deepspeed_engine,
             )
 
         logger.info(f"Epoch {epoch} - train loss: {loss:.5}")

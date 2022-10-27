@@ -20,7 +20,7 @@ from util.misc import targets_to
 from util.optim import adjust_learning_rate, update_ema
 
 import colossalai.engine as Engine
-
+from tqdm import tqdm
 def train_one_epoch(
     model: torch.nn.Module,
     criterion: Optional[torch.nn.Module],
@@ -33,6 +33,7 @@ def train_one_epoch(
     max_norm: float = 0,
     model_ema: Optional[torch.nn.Module] = None,
     colossalai_engine: Engine = None,
+    deepspeed_engine = None,
 ):
     model.train()
     if colossalai_engine is not None:
@@ -47,7 +48,10 @@ def train_one_epoch(
     print_freq = 1000
 
     num_training_steps = int(len(data_loader) * args.epochs)
-    for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    #for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    i = -1
+    for batch_dict in tqdm(data_loader):
+        i += 1
         curr_step = epoch * len(data_loader) + i
         samples = batch_dict["samples"].to(device)
         positive_map = batch_dict["positive_map"].to(device) if "positive_map" in batch_dict else None
@@ -61,6 +65,9 @@ def train_one_epoch(
         if colossalai_engine is not None:
             colossalai_engine.zero_grad()
             outputs = colossalai_engine(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
+        elif deepspeed_engine is not None:
+            deepspeed_engine.zero_grad()
+            outputs = deepspeed_engine(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
         else:
             outputs = model(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
 
@@ -88,6 +95,8 @@ def train_one_epoch(
 
         if colossalai_engine is not None:
             colossalai_engine.backward(losses)
+        elif deepspeed_engine is not None:
+            deepspeed_engine.backward(losses)
         else:
             optimizer.zero_grad()
             losses.backward()
@@ -97,6 +106,8 @@ def train_one_epoch(
 
         if colossalai_engine is not None:
             colossalai_engine.step()
+        elif deepspeed_engine is not None:
+            deepspeed_engine.step()
         else:
             optimizer.step()
 
