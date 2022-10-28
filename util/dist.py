@@ -200,7 +200,7 @@ def save_on_master(*args, **kwargs):
     if is_main_process():
         torch.save(*args, **kwargs)
 
-
+import deepspeed
 def init_distributed_mode(args, port=12345):
     """Initialize distributed training, if appropriate"""
     from datetime import timedelta
@@ -222,9 +222,11 @@ def init_distributed_mode(args, port=12345):
     args.dist_backend = "nccl"
     print("| distributed init (rank {}): {}".format(args.rank, args.dist_url), flush=True)
 
-    dist.init_process_group(
-        backend=args.dist_backend, init_method=args.dist_url, world_size=args.world_size, rank=args.rank, timeout=timedelta(days=10),
-    )
-
+    if not args.from_deepspeed:
+        dist.init_process_group(
+            backend=args.dist_backend, init_method=args.dist_url, world_size=args.world_size, rank=args.rank, timeout=timedelta(days=10),
+        )
+    else:
+        deepspeed.init_distributed()
     dist.barrier()
     setup_for_distributed(args.rank == 0)

@@ -34,13 +34,22 @@ from colossalai.logging import disable_existing_loggers, get_dist_logger
 from colossalai.utils import save_checkpoint
 from colossalai.zero.init_ctx import ZeroInitContext
 from colossalai.zero.shard_utils import BucketTensorShardStrategy, TensorShardStrategy
-from colossalai.gemini import GeminiManager, ChunkManager
+from colossalai.gemini import GeminiManager
+from colossalai.gemini.chunk import ChunkManager
 from colossalai.utils.model.colo_init_context import ColoInitContext
 from colossalai.utils import get_current_device
 from colossalai.nn.parallel import ZeroDDP
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.zero import ZeroOptimizer
 from colossalai.tensor import ProcessGroup
+
+
+import deepspeed
+
+# You may need this with fp16, for BatchEncoder in huggingface not supports fp16
+import logging
+logging.disable(logging.WARNING)
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser("Set transformer detector", add_help=False)
@@ -177,7 +186,7 @@ def get_args_parser():
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
     
     # Distributed training parameters for colossalai
-    parser.add_argument('--colossalai_config', type=str, help='path to the config file')
+    parser.add_argument('--colossalai_config', default=None, type=str, help='path to the config file')
     parser.add_argument("--distributed", action="store_true", help="set up distributed training mode or not")
     parser.add_argument("--from_colossalai", action="store_true", help="luanch from colossalai or not")
     parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
@@ -188,8 +197,10 @@ def get_args_parser():
     parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
 
     parser.add_argument("--mem_cap", type=int, default=0, help="use mem cap in GPU, 0 means no memory cap")
-    parser.add_argument("--use_colo_zero", type=bool, default=True, help="use ZeRO of ColossalAI")
+    parser.add_argument("--use_colo_zero", action='store_true', help="use ZeRO of ColossalAI")
 
+    parser.add_argument('--from_deepspeed', action='store_true', default=None, help='whether use deepspeed or not')
+    parser.add_argument("--deepspeed_config", type=str, default=None, help='path to deepspeed config file')
     return parser
 
 def get_cpu_mem():
@@ -504,8 +515,18 @@ def main(args):
                                                                      train_dataloader = data_loader_train,
                                                                      test_dataloader = val_tuples[0])
                                                                      
-    # init colossal logger
-    logger = get_dist_logger()
+        # init colossal logger
+        logger = get_dist_logger()
+
+    if args.from_deepspeed:
+        deepspeed_engine, optimizer, data_loader_train, _ = deepspeed.initialize(
+                                                         model=model,
+                                                         optimizer=optimizer,
+                                                         config=args.deepspeed_config,
+                                                         training_data=dataset_train,
+                                                         collate_fn=partial(utils.collate_fn, False),
+                                                         )
+    
 
     # Runs training and evaluates after every --eval_skip epochs
     print("Start training")
@@ -527,6 +548,7 @@ def main(args):
                 max_norm=args.clip_max_norm,
                 model_ema=model_ema,
                 colossalai_engine = colossalai_engine,
+                deepspeed_engine = deepspeed_engine,
             )
 
         logger.info(f"Epoch {epoch} - train loss: {loss:.5}")
