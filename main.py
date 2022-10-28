@@ -36,7 +36,8 @@ from colossalai.zero.init_ctx import ZeroInitContext
 from colossalai.zero.shard_utils import BucketTensorShardStrategy, TensorShardStrategy
 
 
-from colossalai.gemini import GeminiManager, ChunkManager
+from colossalai.gemini import GeminiManager
+from colossalai.gemini.chunk import ChunkManager
 from colossalai.utils.model.colo_init_context import ColoInitContext
 from colossalai.utils import get_current_device
 from colossalai.nn.parallel import ZeroDDP
@@ -46,6 +47,11 @@ from colossalai.tensor import ProcessGroup
 
 
 import deepspeed
+
+# You may need this with fp16, for BatchEncoder in huggingface not supports fp16
+import logging
+logging.disable(logging.WARNING)
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser("Set transformer detector", add_help=False)
@@ -193,7 +199,7 @@ def get_args_parser():
     parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
 
     parser.add_argument("--mem_cap", type=int, default=0, help="use mem cap in GPU, 0 means no memory cap")
-    parser.add_argument("--use_colo_zero", type=bool, default=True, help="use ZeRO of ColossalAI")
+    parser.add_argument("--use_colo_zero", action='store_true', help="use ZeRO of ColossalAI")
 
     parser.add_argument('--from_deepspeed', action='store_true', default=None, help='whether use deepspeed or not')
     parser.add_argument("--deepspeed_config", type=str, default=None, help='path to deepspeed config file')
@@ -224,10 +230,6 @@ def main(args):
                         host=args.host,
                         port=args.port,
                         backend=args.backend)
-    #elif args.from_deepspeed:
-    #    print("init distributed mode from deepspeed")
-    #    import deepspeed
-    #    deepspeed.init_distributed()
 
     elif args.distributed:
         print("init distributed mode from torch")
@@ -520,10 +522,12 @@ def main(args):
         logger = get_dist_logger()
 
     if args.from_deepspeed:
-        deepspeed_engine, optimizer, _, _ = deepspeed.initialize(
+        deepspeed_engine, optimizer, data_loader_train, _ = deepspeed.initialize(
                                                          model=model,
                                                          optimizer=optimizer,
                                                          config=args.deepspeed_config,
+                                                         training_data=dataset_train,
+                                                         collate_fn=partial(utils.collate_fn, False),
                                                          )
     
 

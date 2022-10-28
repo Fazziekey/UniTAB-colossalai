@@ -20,7 +20,7 @@ from util.misc import targets_to
 from util.optim import adjust_learning_rate, update_ema
 
 import colossalai.engine as Engine
-from tqdm import tqdm
+
 def train_one_epoch(
     model: torch.nn.Module,
     criterion: Optional[torch.nn.Module],
@@ -46,18 +46,16 @@ def train_one_epoch(
     metric_logger.add_meter("lr_text_encoder", SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = "Epoch: [{}]".format(epoch)
     print_freq = 1000
-
+    if args.from_deepspeed and deepspeed_engine.fp16_enabled():
+        dtype = torch.half
     num_training_steps = int(len(data_loader) * args.epochs)
-    #for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-    i = -1
-    for batch_dict in tqdm(data_loader):
-        i += 1
+    for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         curr_step = epoch * len(data_loader) + i
-        samples = batch_dict["samples"].to(device)
-        positive_map = batch_dict["positive_map"].to(device) if "positive_map" in batch_dict else None
+        samples = batch_dict["samples"].to(device, dtype)
+        positive_map = batch_dict["positive_map"].to(device, dtype) if "positive_map" in batch_dict else None
         targets = batch_dict["targets"]
-        answers = {k: v.to(device) for k, v in batch_dict["answers"].items()} if "answers" in batch_dict else None
-        captions = [t["caption"] for t in targets]
+        answers = {k: v.to(device, dtype) for k, v in batch_dict["answers"].items()} if "answers" in batch_dict else None
+        captions = [t["caption"].to(dtype) for t in targets]
 
         targets = targets_to(targets, device)
 
