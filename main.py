@@ -34,8 +34,6 @@ from colossalai.logging import disable_existing_loggers, get_dist_logger
 from colossalai.utils import save_checkpoint
 from colossalai.zero.init_ctx import ZeroInitContext
 from colossalai.zero.shard_utils import BucketTensorShardStrategy, TensorShardStrategy
-
-
 from colossalai.gemini import GeminiManager
 from colossalai.gemini.chunk import ChunkManager
 from colossalai.utils.model.colo_init_context import ColoInitContext
@@ -230,7 +228,6 @@ def main(args):
                         host=args.host,
                         port=args.port,
                         backend=args.backend)
-
     elif args.distributed:
         print("init distributed mode from torch")
         dist.init_distributed_mode(args)
