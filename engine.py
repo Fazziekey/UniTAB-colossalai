@@ -33,6 +33,7 @@ def train_one_epoch(
     max_norm: float = 0,
     model_ema: Optional[torch.nn.Module] = None,
     colossalai_engine: Engine = None,
+    deepspeed_engine = None,
 ):
     model.train()
     if colossalai_engine is not None:
@@ -45,22 +46,30 @@ def train_one_epoch(
     metric_logger.add_meter("lr_text_encoder", SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = "Epoch: [{}]".format(epoch)
     print_freq = 1000
-
+    if args.from_deepspeed and deepspeed_engine.fp16_enabled():
+        dtype = torch.half
     num_training_steps = int(len(data_loader) * args.epochs)
     for i, batch_dict in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         curr_step = epoch * len(data_loader) + i
-        samples = batch_dict["samples"].to(device)
-        positive_map = batch_dict["positive_map"].to(device) if "positive_map" in batch_dict else None
+        samples = batch_dict["samples"].to(device, dtype)
+        positive_map = batch_dict["positive_map"].to(device, dtype) if "positive_map" in batch_dict else None
         targets = batch_dict["targets"]
-        answers = {k: v.to(device) for k, v in batch_dict["answers"].items()} if "answers" in batch_dict else None
-        captions = [t["caption"] for t in targets]
+        answers = {k: v.to(device, dtype) for k, v in batch_dict["answers"].items()} if "answers" in batch_dict else None
+        captions = [t["caption"].to(dtype) for t in targets]
 
         targets = targets_to(targets, device)
 
+        if args.use_colo_zero:
+            samples = samples.to(torch.half)
+            print(samples)
+            print(captions)
         memory_cache = model(samples, captions, targets, encode_and_save=True)
         if colossalai_engine is not None:
             colossalai_engine.zero_grad()
             outputs = colossalai_engine(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
+        elif deepspeed_engine is not None:
+            deepspeed_engine.zero_grad()
+            outputs = deepspeed_engine(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
         else:
             outputs = model(samples, captions, targets, encode_and_save=False, memory_cache=memory_cache)
 
@@ -88,6 +97,8 @@ def train_one_epoch(
 
         if colossalai_engine is not None:
             colossalai_engine.backward(losses)
+        elif deepspeed_engine is not None:
+            deepspeed_engine.backward(losses)
         else:
             optimizer.zero_grad()
             losses.backward()
@@ -97,6 +108,8 @@ def train_one_epoch(
 
         if colossalai_engine is not None:
             colossalai_engine.step()
+        elif deepspeed_engine is not None:
+            deepspeed_engine.step()
         else:
             optimizer.step()
 

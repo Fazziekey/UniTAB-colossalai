@@ -11,6 +11,7 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from xml.sax.handler import feature_string_interning
+import psutil
 
 import numpy as np
 import torch
@@ -33,6 +34,21 @@ from colossalai.logging import disable_existing_loggers, get_dist_logger
 from colossalai.utils import save_checkpoint
 from colossalai.zero.init_ctx import ZeroInitContext
 from colossalai.zero.shard_utils import BucketTensorShardStrategy, TensorShardStrategy
+from colossalai.gemini import GeminiManager
+from colossalai.gemini.chunk import ChunkManager
+from colossalai.utils.model.colo_init_context import ColoInitContext
+from colossalai.utils import get_current_device
+from colossalai.nn.parallel import ZeroDDP
+from colossalai.nn.optimizer import HybridAdam
+from colossalai.zero import ZeroOptimizer
+from colossalai.tensor import ProcessGroup
+
+
+import deepspeed
+
+# You may need this with fp16, for BatchEncoder in huggingface not supports fp16
+import logging
+logging.disable(logging.WARNING)
 
 
 def get_args_parser():
@@ -170,7 +186,7 @@ def get_args_parser():
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
     
     # Distributed training parameters for colossalai
-    parser.add_argument('--colossalai_config', type=str, help='path to the config file')
+    parser.add_argument('--colossalai_config', default=None, type=str, help='path to the config file')
     parser.add_argument("--distributed", action="store_true", help="set up distributed training mode or not")
     parser.add_argument("--from_colossalai", action="store_true", help="luanch from colossalai or not")
     parser.add_argument('--host', type=str, default='127.0.0.1', help='the master address for distributed training')
@@ -180,7 +196,22 @@ def get_args_parser():
     parser.add_argument('--local_rank', type=int, default=0, help='local rank on the node')
     parser.add_argument('--backend', type=str, default='nccl', help='backend for distributed communication')
 
+    parser.add_argument("--mem_cap", type=int, default=0, help="use mem cap in GPU, 0 means no memory cap")
+    parser.add_argument("--use_colo_zero", action='store_true', help="use ZeRO of ColossalAI")
+
+    parser.add_argument('--from_deepspeed', action='store_true', default=None, help='whether use deepspeed or not')
+    parser.add_argument("--deepspeed_config", type=str, default=None, help='path to deepspeed config file')
     return parser
+
+def get_cpu_mem():
+    return psutil.Process().memory_info().rss / 1024**2
+
+def get_gpu_mem():
+    return torch.cuda.memory_allocated() / 1024**2
+
+
+def get_mem_info(prefix=''):
+    return f'{prefix}GPU memory usage: {get_gpu_mem():.2f} MB, CPU memory usage: {get_cpu_mem():.2f} MB'
 
 
 def main(args):
@@ -201,6 +232,18 @@ def main(args):
         print("init distributed mode from torch")
         dist.init_distributed_mode(args)
 
+    logger = get_dist_logger('cai')
+    # cap memory to 
+    if args.mem_cap > 0:
+        def colo_memory_cap(size_in_GB):
+            from colossalai.utils import colo_set_process_memory_fraction, colo_device_memory_capacity
+            from colossalai.utils import get_current_device
+            cuda_capacity = colo_device_memory_capacity(get_current_device())
+            if size_in_GB * (1024**3) < cuda_capacity:
+                colo_set_process_memory_fraction(size_in_GB * (1024**3) / cuda_capacity)
+                print("Memory Capping, Using {} GB of GPU memory".format(size_in_GB))
+
+        colo_memory_cap(args.mem_cap)
 
     # Update dataset specific configs
     if args.dataset_config is not None:
@@ -225,8 +268,22 @@ def main(args):
     #torch.set_deterministic(True)
 
     # Build the model
-    model, criterion, weight_dict = build_model(args)
-    model.to(device)
+    if args.use_colo_zero:
+        PLACEMENT_POLICY = 'cpu'
+        with ColoInitContext(device=get_current_device()):
+            model, criterion, weight_dict = build_model(args)
+        chunk_size = ChunkManager.search_chunk_size(model, 64 * 1024**2, 32)
+        pg = ProcessGroup()
+        chunk_manager = ChunkManager(chunk_size, pg, enable_distributed_storage=True,
+                                    init_device=GeminiManager.get_default_device(PLACEMENT_POLICY))
+        gemini_manager = GeminiManager(PLACEMENT_POLICY, chunk_manager)
+        model = ZeroDDP(model, gemini_manager)
+        logger.info(get_mem_info(prefix='After init model, '), ranks=[0])
+        logger.info(chunk_manager, ranks=[0])
+        
+    else:
+        model, criterion, weight_dict = build_model(args)
+        model.to(device)
 
 
 
@@ -262,12 +319,19 @@ def main(args):
             "lr": args.text_encoder_lr,
         },
     ]
-    if args.optimizer == "sgd":
-        optimizer = torch.optim.SGD(param_dicts, lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
-    elif args.optimizer in ["adam", "adamw"]:
-        optimizer = torch.optim.AdamW(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
+
+    if args.use_colo_zero:
+        assert args.optimizer == "adam", "use_colo_zero can only be used with adam optimizer"
+        optimizer = HybridAdam(model.parameters(), lr=1e-3)
+        optimizer = ZeroOptimizer(optimizer, model, initial_scale=2**5)
+        logger.info(get_mem_info(prefix='After init optim, '), ranks=[0])
     else:
-        raise RuntimeError(f"Unsupported optimizer {args.optimizer}")
+        if args.optimizer == "sgd":
+            optimizer = torch.optim.SGD(param_dicts, lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+        elif args.optimizer in ["adam", "adamw"]:
+            optimizer = torch.optim.AdamW(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
+        else:
+            raise RuntimeError(f"Unsupported optimizer {args.optimizer}")
 
     # Train dataset
     if len(args.combine_datasets) == 0 and not args.eval:
@@ -451,8 +515,18 @@ def main(args):
                                                                      train_dataloader = data_loader_train,
                                                                      test_dataloader = val_tuples[0])
                                                                      
-    # init colossal logger
-    logger = get_dist_logger()
+        # init colossal logger
+        logger = get_dist_logger()
+
+    if args.from_deepspeed:
+        deepspeed_engine, optimizer, data_loader_train, _ = deepspeed.initialize(
+                                                         model=model,
+                                                         optimizer=optimizer,
+                                                         config=args.deepspeed_config,
+                                                         training_data=dataset_train,
+                                                         collate_fn=partial(utils.collate_fn, False),
+                                                         )
+    
 
     # Runs training and evaluates after every --eval_skip epochs
     print("Start training")
@@ -474,6 +548,7 @@ def main(args):
                 max_norm=args.clip_max_norm,
                 model_ema=model_ema,
                 colossalai_engine = colossalai_engine,
+                deepspeed_engine = deepspeed_engine,
             )
 
         logger.info(f"Epoch {epoch} - train loss: {loss:.5}")
@@ -554,6 +629,7 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Training time {}".format(total_time_str))
+    disable_existing_loggers()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("UniTAB training and evaluation script", parents=[get_args_parser()])
